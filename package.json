@@ -1,0 +1,22 @@
+{
+  "name": "blackcat-migration-validation",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "openai": "^4.52.1",
+    "socket.io": "^4.7.5"
+  },
+  "scripts": {
+    "build": "vite build && node minify-html.mjs",
+    "start": "node server.js"
+  },
+  "devDependencies": {
+    "vite": "latest",
+    "esbuild": "latest",
+    "html-minifier-terser": "latest"
+  }
+}
