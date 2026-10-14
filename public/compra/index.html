@@ -1565,7 +1565,10 @@ async function requestPixCode() {
     }
 
     window._currentPixTransactionId = data.transactionId || null;
-    window._currentPixExpiresAt = data.expiresAt || null;
+    const apiExpiryMs = Date.parse(data.expiresAt || '');
+    window._currentPixExpiresAt = Number.isFinite(apiExpiryMs) && apiExpiryMs > Date.now()
+      ? new Date(apiExpiryMs).toISOString()
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
     return data.pixCode;
   })();
 
@@ -2129,12 +2132,14 @@ function showDeliverySteps(pixCode, expiresAt) {
   const card = document.createElement('div');
   card.className = 'pix-card';
   
-  // Determine if we have a real expiresAt from the API
-  const hasRealExpiry = !!(expiresAt && new Date(expiresAt).getTime() > Date.now());
-  
-  // If no real expiresAt, use fixed 15:00
-  const expiryDate = hasRealExpiry ? new Date(expiresAt) : null;
-  const totalSeconds = hasRealExpiry ? Math.max(0, Math.floor((expiryDate - Date.now()) / 1000)) : 900; // 900 = 15 min in seconds
+  // Use the API expiry when valid; otherwise start a 15-minute fallback countdown.
+  const expiryTimestamp = Date.parse(expiresAt || '');
+  const hasRealExpiry = Number.isFinite(expiryTimestamp);
+  const expiryDate = hasRealExpiry
+    ? new Date(expiryTimestamp)
+    : new Date(Date.now() + 15 * 60 * 1000);
+  if (!hasRealExpiry) window._currentPixExpiresAt = expiryDate.toISOString();
+  const totalSeconds = Math.max(0, Math.ceil((expiryDate.getTime() - Date.now()) / 1000));
   
   // Build HTML with conditional QR section
   let html = `
@@ -2193,29 +2198,27 @@ function showDeliverySteps(pixCode, expiresAt) {
   // Store pixCode for copy
   card._pixCode = pixCode;
   
-  // Start countdown timer only if we have a real expiresAt
-  if (hasRealExpiry) {
-    let remainingSeconds = totalSeconds;
-    const timerDisplay = card.querySelector('#pixTimerDisplay');
-    if (timerDisplay && remainingSeconds > 0) {
-      const timerInterval = setInterval(() => {
-        remainingSeconds--;
-        if (remainingSeconds <= 0) {
-          clearInterval(timerInterval);
-          timerDisplay.textContent = 'Expirado';
-          timerDisplay.className = 'pix-timer danger';
-          const cb = card.querySelector('#pixCopyBtn');
-          if (cb) { cb.disabled = true; cb.style.opacity = '0.5'; cb.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> PIX expirado'; }
-          return;
-        }
-        timerDisplay.textContent = formatExpiryTime(remainingSeconds);
-        if (remainingSeconds <= 60) {
-          timerDisplay.className = 'pix-timer danger';
-        } else if (remainingSeconds <= 180) {
-          timerDisplay.className = 'pix-timer warning';
-        }
-      }, 1000);
-    }
+  // Run the countdown against the absolute expiry time to avoid drift.
+  const timerDisplay = card.querySelector('#pixTimerDisplay');
+  if (timerDisplay) {
+    let timerInterval = null;
+    const updatePixCountdown = () => {
+      const remainingSeconds = Math.max(0, Math.ceil((expiryDate.getTime() - Date.now()) / 1000));
+      if (remainingSeconds <= 0) {
+        if (timerInterval) clearInterval(timerInterval);
+        timerDisplay.textContent = 'Expirado';
+        timerDisplay.className = 'pix-timer danger';
+        const cb = card.querySelector('#pixCopyBtn');
+        if (cb) { cb.disabled = true; cb.style.opacity = '0.5'; cb.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> PIX expirado'; }
+        return;
+      }
+      timerDisplay.textContent = formatExpiryTime(remainingSeconds);
+      if (remainingSeconds <= 60) timerDisplay.className = 'pix-timer danger';
+      else if (remainingSeconds <= 180) timerDisplay.className = 'pix-timer warning';
+      else timerDisplay.className = 'pix-timer';
+    };
+    updatePixCountdown();
+    if (expiryDate.getTime() > Date.now()) timerInterval = setInterval(updatePixCountdown, 1000);
   }
   
   // Robust copy button
@@ -2836,9 +2839,17 @@ window._currentPixCode = state.pixCode; window._pixCopyTimer = null; window._pix
 
     // Restore QR Code and timer if PIX card exists
     const pixCard = msgsEl.querySelector('.pix-card');
-    const hasRealExpiryRestore = window._currentPixExpiresAt && new Date(window._currentPixExpiresAt).getTime() > Date.now();
-    
     if (pixCard && window._currentPixCode) {
+      let expiryTimestampRestore = Date.parse(window._currentPixExpiresAt || '');
+      if (!Number.isFinite(expiryTimestampRestore)) {
+        const generatedAt = Number(window._pixGeneratedAt);
+        expiryTimestampRestore = generatedAt > 0
+          ? generatedAt + 15 * 60 * 1000
+          : Date.now() + 15 * 60 * 1000;
+        window._currentPixExpiresAt = new Date(expiryTimestampRestore).toISOString();
+        saveChatHistory();
+      }
+
       // Restore QR Code only if library is available
       const qrContainer = pixCard.querySelector('#pixQrCanvas');
       if (qrContainer && typeof QRCode !== 'undefined') {
@@ -2850,34 +2861,28 @@ window._currentPixCode = state.pixCode; window._pixCopyTimer = null; window._pix
           }
         });
       }
-      
-      // Restore timer only if we have a real expiresAt
-      if (hasRealExpiryRestore) {
-        const timerDisplay = pixCard.querySelector('#pixTimerDisplay');
-        if (timerDisplay) {
-          const expiryDate = new Date(window._currentPixExpiresAt);
-          const remaining = Math.max(0, Math.floor((expiryDate - Date.now()) / 1000));
+
+      // Restore the countdown using the saved absolute expiry timestamp.
+      const timerDisplay = pixCard.querySelector('#pixTimerDisplay');
+      if (timerDisplay) {
+        let timerInterval = null;
+        const updateRestoredPixCountdown = () => {
+          const remaining = Math.max(0, Math.ceil((expiryTimestampRestore - Date.now()) / 1000));
+          if (remaining <= 0) {
+            if (timerInterval) clearInterval(timerInterval);
+            timerDisplay.textContent = 'Expirado';
+            timerDisplay.className = 'pix-timer danger';
+            const cb = pixCard.querySelector('#pixCopyBtn');
+            if (cb) { cb.disabled = true; cb.style.opacity = '0.5'; }
+            return;
+          }
           timerDisplay.textContent = formatExpiryTime(remaining);
           if (remaining <= 60) timerDisplay.className = 'pix-timer danger';
           else if (remaining <= 180) timerDisplay.className = 'pix-timer warning';
-          if (remaining > 0) {
-            let rem = remaining;
-            const ti = setInterval(() => {
-              rem--;
-              if (rem <= 0) {
-                clearInterval(ti);
-                timerDisplay.textContent = 'Expirado';
-                timerDisplay.className = 'pix-timer danger';
-                const cb = pixCard.querySelector('#pixCopyBtn');
-                if (cb) { cb.disabled = true; cb.style.opacity = '0.5'; }
-                return;
-              }
-              timerDisplay.textContent = formatExpiryTime(rem);
-              if (rem <= 60) timerDisplay.className = 'pix-timer danger';
-              else if (rem <= 180) timerDisplay.className = 'pix-timer warning';
-            }, 1000);
-          }
-        }
+          else timerDisplay.className = 'pix-timer';
+        };
+        updateRestoredPixCountdown();
+        if (expiryTimestampRestore > Date.now()) timerInterval = setInterval(updateRestoredPixCountdown, 1000);
       }
     }
     
