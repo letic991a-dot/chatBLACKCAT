@@ -2937,7 +2937,7 @@ window._currentPixCode = state.pixCode; window._pixCopyTimer = null; window._pix
     }
     if (window._currentFlowStep < 9 && window._currentFlowStep !== 99) runConversation(window._currentFlowStep);
   } else {
-    const { onReadPromise } = addMsg('Olá! Gostaria de pagar agora via Pix.','user');
+    const { onReadPromise } = addMsg('Olá! Gostaria de solicitar a entrega do Gás.','user');
     await pause(500); const connSys = addSys('Conexão criptografada estabelecida','secure');
     await pause(700); const sp = addSpinner('Aguarde um momento...');
     const searchSys = addSys('Buscando consultor disponível...','brand');
